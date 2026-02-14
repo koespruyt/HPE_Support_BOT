@@ -235,7 +235,8 @@ Aanpak 2: Localiseren
 
 ======================================================================
 EN — Overview
-----------------------------------------------------------------------
+======================================================================
+
 HPE CaseBot logs in to the HPE Support Center (one interactive login), reads your "Cases" list and extracts key fields from "Details" and "Communications" for each case.
 It exports a consolidated CSV/JSON overview, one redacted communications dump per case, and a small JSON status file for monitoring (Nagios).
 
