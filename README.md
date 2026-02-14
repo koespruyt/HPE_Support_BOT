@@ -37,7 +37,7 @@ It can run **headless + fully hidden** via Windows Scheduled Task (VBS wrapper).
 
 - Windows 10/11 or Windows Server
 - PowerShell **5.1+**
-- Python **3.12** (the installer can use `py` launcher or `python`)
+- Python **3.12** (installer uses `py` launcher or `python`)
 - Internet access to `support.hpe.com`
 - You must be able to open a browser once to complete MFA (for `hpe_state.json`)
 
@@ -59,6 +59,10 @@ The installer will:
 - optionally create a **10-minute hidden** Scheduled Task
 - optionally run a quick headless test run
 
+---
+
+## Usage
+
 ### Manual usage
 
 #### 1) Setup venv + Playwright
@@ -76,7 +80,58 @@ powershell -ExecutionPolicy Bypass -File .\01_Login.ps1
 powershell -ExecutionPolicy Bypass -File .\Run-HPECaseBot.ps1 -Headless
 ```
 
-### Scheduled Task (hidden + headless)
+### Parameters (important)
+
+Most people should run the **PowerShell wrapper**: `Run-HPECaseBot.ps1`  
+It forwards parameters to Python and also handles logging, Nagios status output, and archiving.
+
+#### Run-HPECaseBot.ps1 parameters
+
+- `-Headless`  
+  Run Chromium headless (no browser window). **Recommended for Scheduled Task.**
+
+- `-Max <int>`  
+  Limit how many cases are processed in this run.  
+  Example: `-Max 10` (0 = all cases found)
+
+- `-NoArchive`  
+  Disable copying `out_hpe\` into `out_hpe_archive\YYYY-MM-DD\`
+
+- `-Format csv|json|both`  
+  Output format for the overview export (default: `both`)
+
+- `-OutDir <path>`  
+  Output directory (default: `.\out_hpe`)
+
+**Examples**
+```powershell
+# headless, process max 10 cases, do NOT archive
+powershell -ExecutionPolicy Bypass -File .\Run-HPECaseBot.ps1 -Headless -Max 10 -NoArchive
+
+# JSON only
+powershell -ExecutionPolicy Bypass -File .\Run-HPECaseBot.ps1 -Headless -Format json
+```
+
+#### Python CLI parameters (advanced)
+
+If you want to run Python directly:
+```powershell
+.\.venv\Scripts\python.exe .\hpe_cases_overview.py --headless --max 10 --format both
+```
+
+Supported args:
+- `--state hpe_state.json`
+- `--selectors hpe_selectors.json`
+- `--outdir out_hpe`
+- `--max 10` (0 = all)
+- `--headless`
+- `--format csv|json|both`
+- `--alarm-file ALERT_SESSION_EXPIRED.txt`
+- `--alarm-cmd "<command to execute on session expiry>"`
+
+---
+
+## Scheduled Task (hidden + headless)
 
 Create/update the task that runs every 10 minutes:
 ```powershell
@@ -96,7 +151,9 @@ schtasks /Delete /TN "HPE CaseBot (10min)" /F
 > Note: Scheduled Tasks created by this package run with an **Interactive token**.  
 > That means: it runs for the current user and typically requires the user to be logged on.
 
-### Outputs
+---
+
+## Outputs
 
 Main outputs in `out_hpe\`:
 
@@ -108,7 +165,9 @@ Main outputs in `out_hpe\`:
 
 Archives (unless `-NoArchive`): `out_hpe_archive\YYYY-MM-DD\...`
 
-### How filtering works
+---
+
+## How filtering works
 
 The bot does **not** hardcode a customer list. It processes **the cases that are visible in your HPE portal** for the logged-in account.
 
@@ -123,11 +182,13 @@ The bot does **not** hardcode a customer list. It processes **the cases that are
   - the case status text
   - keywords in the communications thread
 
-### Monitoring in Nagios
+---
+
+## Monitoring in Nagios
 
 You have two practical monitoring options:
 
-#### Option A — “Is it still running?” (file age)
+### Option A — “Is it still running?” (file age)
 Monitor the age of:
 - `out_hpe\nagios\hpe_casebot.status` **or**
 - `out_hpe\cases_overview.json`
@@ -136,13 +197,13 @@ Monitor the age of:
 - WARNING if older than **30 minutes**
 - CRITICAL if older than **2 hours**
 
-#### Option B — “Is it healthy + how many cases need action?”
+### Option B — “Is it healthy + how many cases need action?”
 Parse `cases_overview.json`:
 - CRITICAL if `errors[]` is not empty
 - WARNING/CRITICAL based on number of cases in `status` “Awaiting Customer Action”
 - optionally: alert on certain inferred categories (`LOG_REQUEST`, `CLOSE_APPROVAL`)
 
-##### Example PowerShell Nagios plugin (runs on Windows)
+#### Example PowerShell Nagios plugin (runs on Windows)
 Save as `C:\HPE_CaseBot\check_hpe_casebot.ps1`:
 
 ```powershell
@@ -166,14 +227,11 @@ $errCount = @($data.errors).Count
 $caseCount = @($data.cases).Count
 $awaiting  = @($data.cases | Where-Object { $_.status -match "Awaiting Customer Action" }).Count
 
-# Status by age first
 if ($ageM -ge $CritAgeMinutes) { Write-Host "CRITICAL - stale ($ageM min) | age_min=$ageM errors=$errCount cases=$caseCount awaiting=$awaiting"; exit 2 }
 if ($ageM -ge $WarnAgeMinutes) { Write-Host "WARNING  - stale ($ageM min) | age_min=$ageM errors=$errCount cases=$caseCount awaiting=$awaiting"; exit 1 }
 
-# Errors from bot
 if ($errCount -gt 0) { Write-Host "CRITICAL - bot errors=$errCount | age_min=$ageM errors=$errCount cases=$caseCount awaiting=$awaiting"; exit 2 }
 
-# Case thresholds
 if ($awaiting -ge $CritCases) { Write-Host "CRITICAL - awaiting=$awaiting | age_min=$ageM errors=$errCount cases=$caseCount awaiting=$awaiting"; exit 2 }
 if ($awaiting -ge $WarnCases) { Write-Host "WARNING  - awaiting=$awaiting | age_min=$ageM errors=$errCount cases=$caseCount awaiting=$awaiting"; exit 1 }
 
@@ -181,16 +239,13 @@ Write-Host "OK - cases=$caseCount awaiting=$awaiting | age_min=$ageM errors=$err
 exit 0
 ```
 
-##### Hooking into Nagios (common patterns)
-- **NSClient++**: execute the PowerShell script remotely from Nagios
-- **NRPE on Windows**: run a command that executes PowerShell
-- **check_by_ssh**: if OpenSSH is enabled on the Windows host
+**Nagios integration notes**
+- **NSClient++** / **NRPE** / **check_by_ssh** are common patterns
+- Always return standard exit codes: `0 OK`, `1 WARNING`, `2 CRITICAL`, `3 UNKNOWN`
 
-Because every Nagios environment differs, the universal rule is:
-- execute the script on the Windows host
-- return standard exit codes: `0 OK`, `1 WARNING`, `2 CRITICAL`, `3 UNKNOWN`
+---
 
-### Session expiry / re-login
+## Session expiry / re-login
 
 If HPE expires your session, runs will start failing until you re-create `hpe_state.json`:
 
@@ -198,12 +253,9 @@ If HPE expires your session, runs will start failing until you re-create `hpe_st
 powershell -ExecutionPolicy Bypass -File .\01_Login.ps1
 ```
 
-You can also run Python directly and use its built-in alarm file:
-```powershell
-.\.venv\Scripts\python.exe .\hpe_cases_overview.py --headless --alarm-file ALERT_SESSION_EXPIRED.txt
-```
+---
 
-### Making it work in another language (international / universal)
+## Making it work in another language (international / universal)
 
 The easiest approach: set your HPE portal language to **English**.  
 If you must use another UI language, these parts may need adjustments:
@@ -212,19 +264,16 @@ If you must use another UI language, these parts may need adjustments:
 Edit `hpe_selectors.json`:
 - `session_expired_text_any`
 - `ready_text_any`
-Add the translated strings you see in your portal.
 
 2) **Field label mapping**  
 Edit `hpe_cases_overview.py` → `FIELD_LABELS`:
 - add translated labels for `status`, `severity`, `product`, `serial`, etc.
 
 3) **Action inference (category + suggested actions)**  
-Edit `hpe_cases_overview.py` → `infer_requested_actions()`:
-- it checks status text (“Approve case closure”, “Complete action plan”, …)
-- it checks communications keywords (“log file request”, “AHS log”, …)
-Add keywords in your language and update the output strings.
+Edit `hpe_cases_overview.py`:
+- update keywords used to infer categories and requested actions
 
-> Tip for maintainability: move the keywords and output strings into a JSON config if you plan to support many languages.
+> Tip: if you plan many languages, move keywords + output strings into a JSON config.
 
 ---
 
@@ -256,6 +305,10 @@ cd /d C:\HPE_CaseBot
 install_me.cmd
 ```
 
+---
+
+## Gebruik
+
 ### Handmatig
 
 ```powershell
@@ -264,7 +317,38 @@ powershell -ExecutionPolicy Bypass -File .\01_Login.ps1
 powershell -ExecutionPolicy Bypass -File .\Run-HPECaseBot.ps1 -Headless
 ```
 
-### Scheduled Task (hidden + headless)
+### Parameters (belangrijk)
+
+#### Run-HPECaseBot.ps1 parameters
+
+- `-Headless`  
+  Headless draaien (geen browservenster). **Aanrader voor Scheduled Task.**
+
+- `-Max <int>`  
+  Max. aantal cases verwerken in deze run.  
+  Voorbeeld: `-Max 10` (0 = alles)
+
+- `-NoArchive`  
+  Geen archief kopie maken naar `out_hpe_archive\YYYY-MM-DD\`
+
+- `-Format csv|json|both`  
+  Exportformaat (default: `both`)
+
+- `-OutDir <pad>`  
+  Output directory (default: `.\out_hpe`)
+
+**Voorbeelden**
+```powershell
+# headless, max 10 cases, GEEN archief
+powershell -ExecutionPolicy Bypass -File .\Run-HPECaseBot.ps1 -Headless -Max 10 -NoArchive
+
+# enkel JSON
+powershell -ExecutionPolicy Bypass -File .\Run-HPECaseBot.ps1 -Headless -Format json
+```
+
+---
+
+## Scheduled Task (hidden + headless)
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\03_CreateTask_10min.ps1 -RootPath (Get-Location) -Minutes 10
@@ -275,38 +359,13 @@ Verwijderen:
 schtasks /Delete /TN "HPE CaseBot (10min)" /F
 ```
 
-### Output bestanden (kort)
-
-- `out_hpe\cases_overview.json` (alles)
-- `out_hpe\cases_overview.csv` (overzicht)
-- `out_hpe\cases\<CASE>_communications_redacted.txt` (communicatie, tokens/passwords geredact)
-- `out_hpe\nagios\hpe_casebot.status` (OK/CRITICAL + timestamp)
-- `out_hpe\run.log` (wrapper log)
-- `out_hpe_archive\YYYY-MM-DD\...` (archief)
-
-### Nagios monitoring
-
-**Minimum**: check “file age” van `cases_overview.json` of `nagios\hpe_casebot.status`.
-
-**Beter**: parse `cases_overview.json` en alert op:
-- `errors[]` niet leeg → CRITICAL
-- aantal “Awaiting Customer Action” → WARNING/CRITICAL
-
-Zie het PowerShell voorbeeld hierboven (kan 1-op-1 gebruikt worden).
-
-### Andere taal gebruiken (universeel maken)
-
-- Voeg vertalingen toe in `hpe_selectors.json` (ready/session expired)
-- Voeg vertaalde labels toe in `FIELD_LABELS` (Python)
-- Voeg vertaalde keywords toe in `infer_requested_actions()` (Python)
-
 ---
 
 ## Security notes (important)
 
 - **Treat `hpe_state.json` like a password.** It contains session cookies.
-- Do **not** commit anything from `out_hpe\` or `out_hpe_archive\` to GitHub (can contain serials, addresses, case data).
-- `cases\*_communications_redacted.txt` redacts obvious tokens/passwords, but **does not remove all sensitive information**.
+- Commit **never**: `hpe_state.json`, `out_hpe\`, `out_hpe_archive\` (case data/serials/addresses).
+- Communications are “redacted”, but **not guaranteed** to remove all sensitive data.
 
 ---
 
@@ -326,7 +385,7 @@ out_hpe/**
 # Session cookies
 hpe_state.json
 
-# Debug dumps
+# Debug dumps / alarms
 **/debug/
 ALERT_SESSION_EXPIRED.txt
 
