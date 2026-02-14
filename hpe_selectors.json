@@ -1,0 +1,69 @@
+{
+  "cases_url": "https://support.hpe.com/connect/s/?tab=cases",
+  "session_expired_text_any": [
+    "Sign In",
+    "Sign in",
+    "Log in",
+    "Login",
+    "Session expired",
+    "Your session has expired",
+    "Something went wrong",
+    "We can't sign you in"
+  ],
+  "ready_text_any": [
+    "Support Center",
+    "Cases",
+    "Case Status:",
+    "Search:",
+    "View Incident Dashboard"
+  ],
+  "contract_banner_text_any": [
+    "Contract(s) for Your Assets Found",
+    "Approve contracts to be added"
+  ],
+  "contract_banner_dismiss_any": [
+    "button:has-text('Dismiss')",
+    "button:has-text('Close')",
+    "button[aria-label*='Close']",
+    "button[title*='Close']",
+    "button:has-text('Not now')",
+    "text=×"
+  ],
+  "case_list_container_any": [
+    "main >> text=Cases",
+    "main",
+    "div:has-text('Awaiting Customer Action')"
+  ],
+  "case_text_regex": "\\bCase\\s+(\\d{7,12})\\b",
+  "case_search_input_any": [
+    "input[placeholder*='Case title']",
+    "input[placeholder*='case number']",
+    "input[placeholder*='Search:']",
+    "input[aria-label*='Search']",
+    "input[type='search']"
+  ],
+  "tab_details_any": [
+    "role=tab[name=/^Details$/i]",
+    "text=/^Details$/i"
+  ],
+  "tab_communications_any": [
+    "role=tab[name=/^Communications/i]",
+    "text=/^Communications/i"
+  ],
+  "comms_panel_hint_any": [
+    "Post a Comment",
+    "Expand all communications",
+    "HPE Support Engineer",
+    "Subject"
+  ],
+  "expand_all_any": [
+    "label:has-text('Expand all communications')",
+    "text=/Expand all communications/i",
+    "role=checkbox[name=/Expand all communications/i]"
+  ],
+  "read_more_any": [
+    "a:has-text(\"Read more\")",
+    "button:has-text(\"Read more\")",
+    "text=/Read more/i"
+  ]
+}
