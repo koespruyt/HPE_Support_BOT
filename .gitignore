@@ -1,0 +1,38 @@
+# --- Python / venv ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# --- Playwright / browsers / traces ---
+ms-playwright/
+playwright-report/
+test-results/
+trace.zip
+
+# --- Runtime output (NEVER commit) ---
+out_hpe/
+out_hpe_archive/
+ALERT_SESSION_EXPIRED.txt
+*.log
+
+# --- Session state / cookies (treat like password) ---
+hpe_state.json
+
+# --- Debug dumps / temp ---
+debug/
+tmp/
+temp/
+*.tmp
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
