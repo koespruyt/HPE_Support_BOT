@@ -374,22 +374,42 @@ schtasks /Delete /TN "HPE CaseBot (10min)" /F
 Recommended `.gitignore`:
 
 ```gitignore
-# Virtual env / dependencies
+# --- Python / venv ---
 .venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
 
-# Runtime output
+# --- Playwright / browsers / traces ---
+ms-playwright/
+playwright-report/
+test-results/
+trace.zip
+
+# --- Runtime output (NEVER commit) ---
 out_hpe/
 out_hpe_archive/
-out_hpe/**
+ALERT_SESSION_EXPIRED.txt
+*.log
 
-# Session cookies
+# --- Session state / cookies (treat like password) ---
 hpe_state.json
 
-# Debug dumps / alarms
-**/debug/
-ALERT_SESSION_EXPIRED.txt
+# --- Debug dumps / temp ---
+debug/
+tmp/
+temp/
+*.tmp
 
-# OS
+# --- OS / IDE ---
 .DS_Store
 Thumbs.db
-```
+.vscode/
+.idea/
+*.swp
+
