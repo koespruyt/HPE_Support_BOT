@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create package (tracked files only)
+        run: |
+          git archive --format=zip --output=HPE_CaseBot_${GITHUB_REF_NAME}.zip HEAD
+          sha256sum HPE_CaseBot_${GITHUB_REF_NAME}.zip > HPE_CaseBot_${GITHUB_REF_NAME}.zip.sha256
+
+      - name: Create GitHub Release + upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            HPE_CaseBot_${{ github.ref_name }}.zip
+            HPE_CaseBot_${{ github.ref_name }}.zip.sha256
