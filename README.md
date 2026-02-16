@@ -84,10 +84,8 @@ Example JSON (trimmed)
 1) Unzip the package somewhere (example `C:\HPE_CaseBot`)
 
 2) Run the interactive installer:
-```bat
 cd /d C:\HPE_CaseBot
 install_me.cmd
-```
 
 The installer will:
 - unblock files
