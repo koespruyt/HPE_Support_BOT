@@ -3,100 +3,71 @@
 Automates an overview of your **HPE Support Center** cases and exports:
 - `cases_overview.json`
 - `cases_overview.csv`
-- per-case **Communications** export (redacted for obvious tokens/passwords)
+- Per-case **Communications** export (redacted for obvious tokens/passwords)
 
-It can run **headless + fully hidden** via Windows Scheduled Task (VBS wrapper).
+Supports **headless** operation and can run **fully hidden** via **Windows Scheduled Task** (VBS wrapper).
 
-> Not affiliated with HPE. Use at your own risk and respect your organization’s security policy and HPE terms.
->
-> 
-EXAMPLE RUN:
+> **Disclaimer:** Not affiliated with HPE. Use at your own risk and always respect your organization’s security policy and the applicable HPE terms.
 
-c:\HPESUPBOT>Run-HPECaseBot.cmd
+---
+
+## Table of contents
+- [English](#english)
+- [Nederlands](#nederlands)
+- [Security notes (important)](#security-notes-important)
+- [Repository hygiene (.gitignore)](#repository-hygiene-gitignore)
+
+---
+
+## English
+
+### What it does
+This bot logs into the HPE Support portal and generates a clean overview of open cases, including:
+- case metadata (status, severity, product, etc.)
+- action-plan related signals (e.g., “Awaiting Customer Action”)
+- a per-case communications export (with redaction applied)
+
+### Example run
+
+```powershell
+c:\HPESUPBOT> Run-HPECaseBot.cmd
+Output (example):
 
 Open cases: https://support.hpe.com/connect/s/?tab=cases
 
-Found cases: 2 -> 540XXXXXXX, 540XXXXXXX  (MASKED FOR PRIVACY)
+Found cases: 2 -> 540XXXXXXX, 540XXXXXXX (MASKED FOR PRIVACY)
+
 === [1/2] Case 540XXXXXXX ===
-OK: 5401149164 | CZ29XXXXGT | Awaiting Customer Action - Complete action plan
-=== [2/2] Case 5400991224 ===
-OK: 5400991224 | CZ21XXXXGG | Awaiting Customer Action - Approve case closure
-CSV: C:\HPESUPBOT\out_hpe\cases_overview.csv
+OK: 540XXXXXXX | CZ29XXXXGT | Awaiting Customer Action - Complete action plan
+
+=== [2/2] Case 540XXXXXXX ===
+OK: 540XXXXXXX | CZ21XXXXGG | Awaiting Customer Action - Approve case closure
+
+CSV:  C:\HPESUPBOT\out_hpe\cases_overview.csv
 JSON: C:\HPESUPBOT\out_hpe\cases_overview.json
+
 Done. Cases: 2
-
-
-example json:
-
-
+Example JSON (trimmed)
 {
   "generated_at": "2026-02-16T15:05:46Z",
   "cases": [
     {
       "case_no": "CASE-001",
       "serial": "SERIAL-001",
-      "host_name": "",
-      "contact_name": "",
-      "addr_street": "",
-      "addr_city": "",
-      "addr_state": "",
-      "addr_postal_code": "",
-      "addr_country": "",
       "status": "Awaiting Customer Action - Complete action plan",
       "severity": "3-No Business Impact",
       "product": "Server (model redacted)",
       "product_no": "PRODUCTNO-001",
       "group": "GROUP-001",
-      "action_plan": "Complete action plan",
-      "hpe_last_update": "",
-      "hpe_last_subject": "",
       "hpe_request_category": "ACTION_PLAN",
-      "hpe_request_summary": "HPE wacht op completion van het action plan.",
-      "hpe_requested_actions": "Action plan afronden en bevestigen in HPE portal (Complete action plan).",
-      "hpe_key_links": "",
-      "event_ids": "",
-      "problem_descriptions": "",
-      "ahs_links": "",
-      "dropbox_hosts": "",
-      "dropbox_logins": "",
+      "hpe_request_summary": "HPE is waiting for completion of the action plan.",
+      "hpe_requested_actions": "Complete the action plan and confirm in the HPE portal.",
       "comms_file": "REDACTED_PATH/cases/CASE-001_communications_redacted.txt",
       "generated_at": "2026-02-16T15:05:42Z"
-    },
-    {
-      "case_no": "CASE-002",
-      "serial": "SERIAL-001",
-      "host_name": "",
-      "contact_name": "",
-      "addr_street": "",
-      "addr_city": "",
-      "addr_state": "",
-      "addr_postal_code": "",
-      "addr_country": "",
-      "status": "Awaiting Customer Action - Complete action plan",
-      "severity": "3-No Business Impact",
-      "product": "Server (model redacted)",
-      "product_no": "PRODUCTNO-001",
-      "group": "GROUP-001",
-      "action_plan": "Complete action plan",
-      "hpe_last_update": "",
-      "hpe_last_subject": "",
-      "hpe_request_category": "ACTION_PLAN",
-      "hpe_request_summary": "HPE wacht op completion van het action plan.",
-      "hpe_requested_actions": "Action plan afronden en bevestigen in HPE portal (Complete action plan).",
-      "hpe_key_links": "",
-      "event_ids": "",
-      "problem_descriptions": "",
-      "ahs_links": "",
-      "dropbox_hosts": "",
-      "dropbox_logins": "",
-      "comms_file": "REDACTED_PATH/cases/CASE-002_communications_redacted.txt",
-      "generated_at": "2026-02-16T15:05:46Z"
     }
   ],
   "errors": []
 }
-
-
 ---
 
 ## Table of contents
