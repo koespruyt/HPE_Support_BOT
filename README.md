@@ -70,27 +70,6 @@ Example JSON (trimmed)
 }
 ---
 
-## Table of contents
-
-- [English](#english)
-- [Nederlands](#nederlands)
-- [Security notes (important)](#security-notes-important)
-- [Repository hygiene (.gitignore)](#repository-hygiene-gitignore)
-
----
-
-## English
-
-### What it does
-
-1. Uses an **interactive login once** to save your authenticated session into `hpe_state.json`.
-2. Opens your HPE **Cases** page and collects the case numbers that are **visible for your account** (and your current “Group” scope in the portal).
-3. For each case:
-   - reads **Details**
-   - reads **Communications**
-   - extracts/normalizes fields (status, severity, product, serial, etc.)
-   - infers an **action category** + suggested actions (example: `CLOSE_APPROVAL`, `LOG_REQUEST`)
-4. Writes exports to `out_hpe\` and a lightweight status file for monitoring.
 
 ### Requirements
 
