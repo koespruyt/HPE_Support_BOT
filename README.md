@@ -8,6 +8,94 @@ Automates an overview of your **HPE Support Center** cases and exports:
 It can run **headless + fully hidden** via Windows Scheduled Task (VBS wrapper).
 
 > Not affiliated with HPE. Use at your own risk and respect your organization’s security policy and HPE terms.
+>
+> 
+EXAMPLE RUN:
+
+c:\HPESUPBOT>Run-HPECaseBot.cmd
+
+Open cases: https://support.hpe.com/connect/s/?tab=cases
+
+Found cases: 2 -> 540XXXXXXX, 540XXXXXXX  (MASKED FOR PRIVACY)
+=== [1/2] Case 540XXXXXXX ===
+OK: 5401149164 | CZ29XXXXGT | Awaiting Customer Action - Complete action plan
+=== [2/2] Case 5400991224 ===
+OK: 5400991224 | CZ21XXXXGG | Awaiting Customer Action - Approve case closure
+CSV: C:\HPESUPBOT\out_hpe\cases_overview.csv
+JSON: C:\HPESUPBOT\out_hpe\cases_overview.json
+Done. Cases: 2
+
+
+example json:
+
+
+{
+  "generated_at": "2026-02-16T15:05:46Z",
+  "cases": [
+    {
+      "case_no": "CASE-001",
+      "serial": "SERIAL-001",
+      "host_name": "",
+      "contact_name": "",
+      "addr_street": "",
+      "addr_city": "",
+      "addr_state": "",
+      "addr_postal_code": "",
+      "addr_country": "",
+      "status": "Awaiting Customer Action - Complete action plan",
+      "severity": "3-No Business Impact",
+      "product": "Server (model redacted)",
+      "product_no": "PRODUCTNO-001",
+      "group": "GROUP-001",
+      "action_plan": "Complete action plan",
+      "hpe_last_update": "",
+      "hpe_last_subject": "",
+      "hpe_request_category": "ACTION_PLAN",
+      "hpe_request_summary": "HPE wacht op completion van het action plan.",
+      "hpe_requested_actions": "Action plan afronden en bevestigen in HPE portal (Complete action plan).",
+      "hpe_key_links": "",
+      "event_ids": "",
+      "problem_descriptions": "",
+      "ahs_links": "",
+      "dropbox_hosts": "",
+      "dropbox_logins": "",
+      "comms_file": "REDACTED_PATH/cases/CASE-001_communications_redacted.txt",
+      "generated_at": "2026-02-16T15:05:42Z"
+    },
+    {
+      "case_no": "CASE-002",
+      "serial": "SERIAL-001",
+      "host_name": "",
+      "contact_name": "",
+      "addr_street": "",
+      "addr_city": "",
+      "addr_state": "",
+      "addr_postal_code": "",
+      "addr_country": "",
+      "status": "Awaiting Customer Action - Complete action plan",
+      "severity": "3-No Business Impact",
+      "product": "Server (model redacted)",
+      "product_no": "PRODUCTNO-001",
+      "group": "GROUP-001",
+      "action_plan": "Complete action plan",
+      "hpe_last_update": "",
+      "hpe_last_subject": "",
+      "hpe_request_category": "ACTION_PLAN",
+      "hpe_request_summary": "HPE wacht op completion van het action plan.",
+      "hpe_requested_actions": "Action plan afronden en bevestigen in HPE portal (Complete action plan).",
+      "hpe_key_links": "",
+      "event_ids": "",
+      "problem_descriptions": "",
+      "ahs_links": "",
+      "dropbox_hosts": "",
+      "dropbox_logins": "",
+      "comms_file": "REDACTED_PATH/cases/CASE-002_communications_redacted.txt",
+      "generated_at": "2026-02-16T15:05:46Z"
+    }
+  ],
+  "errors": []
+}
+
 
 ---
 
