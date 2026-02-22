@@ -9,7 +9,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# --- Playwright / browsers / traces ---
+# --- Playwright ---
 ms-playwright/
 playwright-report/
 test-results/
@@ -21,10 +21,11 @@ out_hpe_archive/
 ALERT_SESSION_EXPIRED.txt
 *.log
 
-# --- Session state / cookies (treat like password) ---
+# --- Sensitive auth data (treat like passwords) ---
 hpe_state.json
+hpe_credential.xml
 
-# --- Debug dumps / temp ---
+# --- Debug / temp ---
 debug/
 tmp/
 temp/
