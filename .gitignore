@@ -21,7 +21,7 @@ out_hpe_archive/
 ALERT_SESSION_EXPIRED.txt
 *.log
 
-# --- Sensitive auth data (treat like passwords) ---
+# --- Sensitive auth data ---
 hpe_state.json
 hpe_credential.xml
 
