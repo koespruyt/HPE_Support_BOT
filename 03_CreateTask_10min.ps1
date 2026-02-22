@@ -21,7 +21,7 @@ if (!(Test-Path $Script)) { throw "Missing Run-HPECaseBot.ps1 in $Root" }
 $VbsContent = @'
 ' Run-HPECaseBot_hidden.vbs
 ' Doel: Run-HPECaseBot.ps1 volledig verborgen (geen console window) voor Scheduled Task.
-' Versie: v7 (robuste quoting)
+' Versie: v8 (timeout + robust)
 
 Option Explicit
 
@@ -35,7 +35,7 @@ runner = here & "\Run-HPECaseBot.ps1"
 q      = Chr(34)
 
 sh.CurrentDirectory = here
-cmd = q & ps & q & " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " & q & runner & q & " -Headless"
+cmd = q & ps & q & " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " & q & runner & q & " -Headless -TimeoutSeconds 900"
 
 On Error Resume Next
 rc = sh.Run(cmd, 0, True)
@@ -104,7 +104,7 @@ $xml = @"
     <Enabled>true</Enabled>
     <Hidden>false</Hidden>
     <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <ExecutionTimeLimit>PT15M</ExecutionTimeLimit>
     <Priority>7</Priority>
   </Settings>
   <Actions Context='Author'>

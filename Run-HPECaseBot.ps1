@@ -95,6 +95,9 @@ try {
 
   Ensure-Dir $OutDir
 
+  # Pass OutDir to Python for debug artifacts (screenshots/html on login fail)
+  $env:HPE_OUTDIR = $OutDir
+
   Append-Log "START Root=$Root OutDir=$OutDir"
 
   # Preconditions
@@ -112,11 +115,30 @@ try {
 
   $state = Join-Path $Root 'hpe_state.json'
   if (-not (Test-Path -LiteralPath $state)) {
-    Write-Status 'CRITICAL' "Missing state file: hpe_state.json (run .\\01_Login.ps1)" | Out-Null
-    throw "Missing state file: $state"
+    Append-Log "WARN: Missing state file: $state (will attempt auto-login if DPAPI creds exist)"
   }
 
-  $selectors = Join-Path $Root 'hpe_selectors.json'
+  # Optional DPAPI credentials for headless auto-login (no MFA)
+  $credPath = Join-Path $Root 'hpe_credential.xml'
+  if (Test-Path -LiteralPath $credPath) {
+    try {
+      $c = Import-Clixml -LiteralPath $credPath
+      if ($c -and -not [string]::IsNullOrWhiteSpace($c.UserName)) {
+        $env:HPE_USERNAME = $c.UserName
+        $env:HPE_PASSWORD = $c.GetNetworkCredential().Password
+        Append-Log ("Creds loaded from hpe_credential.xml (DPAPI) user={0}" -f $c.UserName)
+      } else {
+        Append-Log "WARN: hpe_credential.xml loaded but username empty (ignored)"
+      }
+    } catch {
+      Append-Log ("WARN: Could not load hpe_credential.xml: {0}" -f $_.Exception.Message)
+    }
+  } else {
+    # no creds file: only state-based login possible
+    # Append-Log "INFO: No hpe_credential.xml found (state-based session only)"
+  }
+
+$selectors = Join-Path $Root 'hpe_selectors.json'
   if (-not (Test-Path -LiteralPath $selectors)) {
     Write-Status 'CRITICAL' "Missing selectors file: hpe_selectors.json" | Out-Null
     throw "Missing selectors file: $selectors"
@@ -163,7 +185,9 @@ try {
   }
 
   if ($exitCode -ne 0) {
-    $short = ($lines | Select-Object -First 1)
+    # Prefer a meaningful error line if present (otherwise the first line).
+    $short = ($lines | Where-Object { $_ -match 'SESSION_EXPIRED|LOGIN FAILED|CASES_PAGE_NOT_READY|ERROR' } | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($short)) { $short = ($lines | Select-Object -First 1) }
     if ([string]::IsNullOrWhiteSpace($short)) { $short = "Python exited with code $exitCode" }
 
     Write-Status 'CRITICAL' $short | Out-Null

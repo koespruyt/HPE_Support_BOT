@@ -80,10 +80,19 @@ catch {
   Write-Warning "ScheduledTasks module not usable. Falling back to schtasks.exe"
   $rl = if($RunHighest){"/RL HIGHEST"}else{""}
 
-  # schtasks /TR quoting is finicky: we wrap the entire command in quotes and double-quote the VBS path.
-  $tr = '"{0}" //B //NoLogo "{1}"' -f $wscript, $vbs
-  $cmd = "schtasks /Create /F /SC DAILY /ST $Time /TN `"$TaskName`" /TR $tr $rl"
-  Write-Host "Running: $cmd"
-  cmd.exe /c $cmd | Out-Null
+  # schtasks.exe expects the entire command line as ONE /TR argument.
+  # Put wscript + its switches + vbs path into a single string.
+  $tr = "`"$wscript`" //B //NoLogo `"$vbs`""
+
+  $args = @("/Create","/F","/SC","DAILY","/ST",$Time,"/TN",$TaskName,"/TR",$tr)
+  if ($RunHighest) { $args += @("/RL","HIGHEST") }
+
+  Write-Host ("Running: schtasks.exe " + ($args -join " "))
+  $out = & schtasks.exe @args 2>&1
+  $code = $LASTEXITCODE
+  if ($code -ne 0) {
+    throw ("schtasks.exe failed (exit {0}). Output: {1}" -f $code, ($out -join "`n"))
+  }
+
   Write-Host "✅ Scheduled task created/updated (schtasks)."
 }

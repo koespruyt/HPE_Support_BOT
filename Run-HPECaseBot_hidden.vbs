@@ -14,7 +14,7 @@ runner = here & "\Run-HPECaseBot.ps1"
 q      = Chr(34)
 
 sh.CurrentDirectory = here
-cmd = q & ps & q & " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " & q & runner & q & " -Headless"
+cmd = q & ps & q & " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " & q & runner & q & " -Headless -TimeoutSeconds 900"
 
 On Error Resume Next
 rc = sh.Run(cmd, 0, True)

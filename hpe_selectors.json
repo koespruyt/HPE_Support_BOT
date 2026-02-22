@@ -1,14 +1,12 @@
 {
   "cases_url": "https://support.hpe.com/connect/s/?tab=cases",
   "session_expired_text_any": [
-    "Sign In",
-    "Sign in",
-    "Log in",
-    "Login",
     "Session expired",
     "Your session has expired",
-    "Something went wrong",
-    "We can't sign you in"
+    "sign in again",
+    "We can't sign you in",
+    "We can\u2019t sign you in",
+    "Something went wrong"
   ],
   "ready_text_any": [
     "Support Center",
@@ -27,7 +25,7 @@
     "button[aria-label*='Close']",
     "button[title*='Close']",
     "button:has-text('Not now')",
-    "text=×"
+    "text=\u00d7"
   ],
   "case_list_container_any": [
     "main >> text=Cases",
@@ -65,5 +63,127 @@
     "a:has-text(\"Read more\")",
     "button:has-text(\"Read more\")",
     "text=/Read more/i"
-  ]
+  ],
+  "authenticating_text_any": [
+    "while we authenticate your account",
+    "authenticate your account",
+    "Authenticating",
+    "Please wait",
+    "Signing you in",
+    "Sign you in"
+  ],
+  "login_username_any": [
+    "input[aria-label*='Email' i]",
+    "input[placeholder*='your.email' i]",
+    "input[placeholder*='email' i]",
+    "input[name='email']",
+    "input[id='username']",
+    "input[name='userName']",
+    "input#username",
+    "input[name='username']",
+    "input[autocomplete='username']",
+    "#okta-signin-username",
+    "input#okta-signin-username",
+    "input[name='identifier']",
+    "input[type='email']",
+    "input[name*='user' i]",
+    "input[id*='user' i]",
+    "input[name*='email' i]",
+    "input[id*='email' i]",
+    "input[name*='login' i]",
+    "input[id*='login' i]",
+    "input[aria-label*='User ID' i]",
+    "input[aria-label*='Email Address' i]",
+    "input[placeholder*='company.com' i]",
+    "input[placeholder*='user123' i]",
+    "input[name='j_username']",
+    "input#j_username",
+    "input#email",
+    "input[type='text']"
+  ],
+  "login_password_any": [
+    "input[aria-label*='Password' i]",
+    "input#password",
+    "input[name='password']",
+    "input[autocomplete='current-password']",
+    "#okta-signin-password",
+    "input#okta-signin-password",
+    "input[type='password']",
+    "input[name*='pass' i]",
+    "input[id*='pass' i]"
+  ],
+  "login_next_any": [
+    "button:has-text('Next')",
+    "button:has-text('Continue')",
+    "button:has-text('Volgende')",
+    "button:has-text('Doorgaan')",
+    "input[type='submit'][value*='Next' i]",
+    "input[value='Next']",
+    "button[type='submit']:has-text('Next')"
+  ],
+  "login_submit_any": [
+    "#okta-signin-submit",
+    "button#okta-signin-submit",
+    "input#okta-signin-submit",
+    "button:has-text('Sign in')",
+    "button:has-text('Log in')",
+    "button:has-text('Login')",
+    "button:has-text('Aanmelden')",
+    "button:has-text('Inloggen')",
+    "button:has-text('Submit')",
+    "input[type='submit']",
+    "button:has-text('Sign In')",
+    "button:has-text('Continue')",
+    "button[type='submit']"
+  ],
+  "logged_out_text_any": [
+    "Sign In",
+    "Sign in",
+    "Log in",
+    "Login",
+    "Aanmelden",
+    "Inloggen"
+  ],
+  "signin_trigger_any": [
+    "button:has-text('Sign In')",
+    "a:has-text('Sign In')",
+    "button:has-text('Sign in')",
+    "a:has-text('Sign in')",
+    "button:has-text('Log in')",
+    "a:has-text('Log in')",
+    "button:has-text('Login')",
+    "a:has-text('Login')",
+    "button:has-text('Aanmelden')",
+    "a:has-text('Aanmelden')",
+    "button:has-text('Inloggen')",
+    "a:has-text('Inloggen')",
+    "role=menuitem[name=/Sign In/i]",
+    "role=menuitem[name=/Sign in/i]",
+    "text=/^Sign In$/i",
+    "text=/^Sign in$/i",
+    "a[role='menuitem']:has-text('Sign In')",
+    "button[aria-label*='Sign In' i]",
+    "a[aria-label*='Sign In' i]",
+    "a[data-key='SignIn']",
+    "li[data-key='SignIn'] a",
+    "a[href*='/hpesc/public/home/signin']",
+    "a[href*='/home/signin']"
+  ],
+  "cookie_accept_any": [
+    "#onetrust-accept-btn-handler",
+    "button#onetrust-accept-btn-handler",
+    "button:has-text('Accept all')",
+    "button:has-text('Accept All')",
+    "button:has-text('I agree')",
+    "button:has-text('Agree')",
+    "button:has-text('Alles accepteren')",
+    "button:has-text('Alles aanvaarden')"
+  ],
+  "cookie_decline_any": [
+    "button:has-text('Decline optional')",
+    "button:has-text('Decline')",
+    "button:has-text('Weigeren')",
+    "button:has-text('Optioneel weigeren')"
+  ],
+  "signin_direct_url": "https://support.hpe.com/hpesc/public/home/signin"
 }

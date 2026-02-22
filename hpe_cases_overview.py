@@ -2,6 +2,8 @@ import argparse
 import csv
 import json
 import re
+import os
+import time
 import subprocess
 import sys
 
@@ -16,9 +18,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
-
-
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError, Error as PWError
 def _force_utf8_stdio() -> None:
     """Prevent UnicodeEncodeError on Windows consoles/scheduled tasks.
 
@@ -34,6 +34,16 @@ def _force_utf8_stdio() -> None:
 
 
 _force_utf8_stdio()
+
+# --- Global runtime deadline (optional) ---
+_DEADLINE = None  # type: float | None
+
+def _check_deadline():
+    """Raise RuntimeError('GLOBAL_TIMEOUT') if a global deadline is configured and exceeded."""
+    global _DEADLINE
+    if _DEADLINE and time.time() > _DEADLINE:
+        raise RuntimeError('GLOBAL_TIMEOUT')
+
 
 # --- Field label mapping (UI text -> normalized key) ---
 # If HPE changes UI labels, update these lists or hpe_selectors.json (preferred).
@@ -97,30 +107,755 @@ def first_visible_locator(page, selector_list):
             continue
     return None
 
+
+def first_visible_locator_anywhere(page, selector_list):
+    """Find first visible locator in main page OR any child frame."""
+    loc = first_visible_locator(page, selector_list)
+    if loc:
+        return loc
+    try:
+        frames = list(page.frames)
+        main = page.main_frame
+    except Exception:
+        frames, main = [], None
+
+    for fr in frames:
+        try:
+            if main is not None and fr == main:
+                continue
+        except Exception:
+            pass
+        for sel in selector_list:
+            try:
+                l = fr.locator(sel).first
+                if l.count() > 0 and l.is_visible():
+                    return l
+            except Exception:
+                continue
+    return None
+
+def largest_visible_locator(page, selector_list):
+    """Pick the *largest* visible element from a selector list.
+
+    HPE's Cases UI often has multiple visible matches (e.g. a small header span
+    containing "Cases" vs the real list container). Choosing the first match can
+    accidentally scope to only one status group.
+    """
+    best = None
+    best_area = -1.0
+    for sel in selector_list:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() == 0 or not loc.is_visible():
+                continue
+            box = None
+            try:
+                box = loc.bounding_box()
+            except Exception:
+                box = None
+            area = 0.0
+            if box and box.get("width") and box.get("height"):
+                area = float(box["width"]) * float(box["height"])
+            if area > best_area:
+                best_area = area
+                best = loc
+        except Exception:
+            continue
+    return best
+
+def get_cases_home_url(cases_url: str) -> str:
+    # Turn ".../connect/s/?tab=cases" into ".../connect/s/".
+    if not cases_url:
+        return "https://support.hpe.com/connect/s/"
+    try:
+        u = cases_url.split("?", 1)[0]
+        if not u.endswith("/"):
+            u += "/"
+        return u
+    except Exception:
+        return "https://support.hpe.com/connect/s/"
+
+def atomic_write_storage_state(context, state_path: Path) -> None:
+    """Persist refreshed session state atomically.
+
+    Many SSO sessions use *rolling* cookies/tokens. If we never write the refreshed
+    state back, the on-disk state expires after ~24h and the user must re-login.
+    """
+    tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+    context.storage_state(path=str(tmp))
+    tmp.replace(state_path)
+
+def is_session_expired(page, cfg) -> bool:
+    # Expired/failed-auth banners sometimes render inside IdP frames
+    return any_text_present_anywhere(page, cfg.get("session_expired_text_any", []))
+
+def log_login_status(page, cfg) -> bool:
+    """Return True if we're likely authenticated (best-effort)."""
+    if is_session_expired(page, cfg):
+        return False
+    # A couple of quick positive signals (non-exhaustive)
+    if any_text_present(page, cfg.get("ready_text_any", [])):
+        return True
+    # When already on cases page, any case pattern is good enough.
+    try:
+        if page.locator("text=/\\bCase\\s+\\d{7,12}\\b/").count() > 0:
+            return True
+    except Exception:
+        pass
+    return True
+
 def any_text_present(page, texts):
+    """Return True if any of the given texts is PRESENT AND VISIBLE on the page."""
     for s in texts:
         try:
-            if page.locator(f"text={s}").count() > 0:
-                return True
+            loc = page.locator(f"text={s}").first
+            if loc.count() > 0:
+                try:
+                    if loc.is_visible():
+                        return True
+                except Exception:
+                    # detached / not visible
+                    pass
         except Exception:
             continue
     return False
 
+def any_text_present_anywhere(page, texts):
+    """Check for any of the given texts in page OR child frames (VISIBLE only)."""
+    if any_text_present(page, texts):
+        return True
+    try:
+        frames = list(page.frames)
+        main = page.main_frame
+    except Exception:
+        frames, main = [], None
+
+    for fr in frames:
+        try:
+            if main is not None and fr == main:
+                continue
+        except Exception:
+            pass
+        for s in texts:
+            try:
+                loc = fr.locator(f"text={s}").first
+                if loc.count() > 0:
+                    try:
+                        if loc.is_visible():
+                            return True
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+    return False
+
+
+def is_authenticating(page, cfg) -> bool:
+    texts = cfg.get("authenticating_text_any") or []
+    return any_text_present_anywhere(page, texts)
+
+
+def dismiss_cookie_banner(page, cfg) -> bool:
+    """Best-effort accept cookie banner (OneTrust etc.) to unblock clicks."""
+    sels = cfg.get("cookie_accept_any") or []
+    if not sels:
+        return False
+    btn = first_visible_locator_anywhere(page, sels)
+    if not btn:
+        return False
+    try:
+        btn.click(timeout=8000, force=True)
+        page.wait_for_timeout(800)
+        return True
+    except Exception:
+        return False
+
+
+def wait_for_portal_state(page, cfg, timeout_ms: int = 10000) -> None:
+    """Wait until the portal renders enough to decide login state.
+
+    We avoid false positives by waiting until we can *see* at least one of:
+    - a visible sign-in trigger
+    - a visible sign-out trigger
+    - a login/auth page (auth.hpe.com or visible login form)
+    """
+    start = time.time()
+    signout_texts = cfg.get("signout_text_any") or ["Sign Out", "Sign out", "Log out", "Logout", "Afmelden", "Uitloggen"]
+    signin_triggers = cfg.get("signin_trigger_any") or []
+
+    while (time.time() - start) * 1000 < timeout_ms:
+        try:
+            if page.is_closed():
+                return
+        except Exception:
+            return
+
+        try:
+            dismiss_cookie_banner(page, cfg)
+        except Exception:
+            pass
+
+        try:
+            if is_hpe_auth_page(page, cfg) or is_login_screen(page, cfg):
+                return
+        except Exception:
+            pass
+
+        try:
+            if first_visible_locator_anywhere(page, signin_triggers):
+                return
+        except Exception:
+            pass
+
+        try:
+            if any_text_present_anywhere(page, signout_texts):
+                return
+        except Exception:
+            pass
+
+        try:
+            page.wait_for_timeout(250)
+        except Exception:
+            return
+
+
+
+def ensure_page_alive(page, context):
+    """Return a usable Page object even if the previous one was closed."""
+    try:
+        if page is not None and (not page.is_closed()):
+            return page
+    except Exception:
+        pass
+    try:
+        if hasattr(context, "pages") and context.pages:
+            # Return the newest still-open page
+            for p in reversed(context.pages):
+                try:
+                    if not p.is_closed():
+                        return p
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    try:
+        return context.new_page()
+    except Exception:
+        return page
+
+        dismiss_cookie_banner(page, cfg)
+
+        if is_hpe_auth_page(page, cfg) or is_login_screen(page, cfg):
+            return
+        try:
+            if is_logged_out(page, cfg):
+                return
+        except Exception:
+            pass
+        try:
+            if any_text_present_anywhere(page, cfg.get("signout_text_any", [])):
+                return
+        except Exception:
+            pass
+        try:
+            page.wait_for_timeout(250)
+        except Exception:
+            return
+
+
+def is_logged_out(page, cfg) -> bool:
+    """Detect logged-out state on the HPE portal home (no login form yet)."""
+    # If we can see a Sign In trigger and we do NOT see a Sign Out trigger, treat as logged out.
+    signout_texts = cfg.get("signout_text_any") or ["Sign Out", "Sign out", "Log out", "Logout", "Afmelden", "Uitloggen"]
+    try:
+        if any_text_present_anywhere(page, signout_texts):
+            return False
+    except Exception:
+        pass
+
+    triggers = cfg.get("signin_trigger_any") or []
+    if triggers:
+        if first_visible_locator_anywhere(page, triggers):
+            return True
+
+    # Structural sign-in links (often present even if the menu is closed / hidden)
+    # This helps avoid false "LOGIN OK" when the SPA renders a hidden Sign In menu item.
+    try:
+        if page.locator("a[data-key='SignIn'], a[href*='/hpesc/public/home/signin'], a[href*='/home/signin']").count() > 0:
+            return True
+    except Exception:
+        pass
+
+
+    # Fallback: if the page contains common logged-out texts, assume logged out.
+    logged_out_texts = cfg.get("logged_out_text_any") or []
+    if logged_out_texts:
+        try:
+            if any_text_present_anywhere(page, logged_out_texts):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def click_sign_in(page, context, cfg):
+    """Click a visible Sign In entry/button if present.
+
+    Some flows open a new tab/window; return the active page to continue automation.
+    """
+    triggers = cfg.get("signin_trigger_any") or []
+    if not triggers:
+        return page
+    btn = first_visible_locator_anywhere(page, triggers)
+    if not btn:
+        return page
+    try:
+        try:
+            btn.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        new_page = None
+        # Try to detect popup/new page
+        try:
+            with context.expect_page(timeout=3000) as pi:
+                btn.click(timeout=15000, force=True)
+            new_page = pi.value
+        except Exception:
+            # No popup; click already happened in same page.
+            try:
+                btn.click(timeout=15000, force=True)
+            except Exception:
+                pass
+
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        if new_page:
+            try:
+                new_page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            return new_page
+        else:
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            return page
+    except Exception:
+        return page
+
+
+def is_hpe_auth_page(page, cfg) -> bool:
+    """Detect HPE's own auth/sign-in page (auth.hpe.com) even if selectors don't match."""
+    try:
+        u = (page.url or "").lower()
+        if "auth.hpe.com" in u:
+            return True
+    except Exception:
+        pass
+    # Fallback by visible texts (works across minor DOM changes)
+    auth_texts = cfg.get("auth_page_text_any") or [
+        "HPE Sign In",
+        "User ID / Email Address",
+        "Forgot Password",
+        "Forgot User ID",
+        "Unlock Account",
+    ]
+    try:
+        return any_text_present_anywhere(page, auth_texts)
+    except Exception:
+        return False
+
+
+def is_login_screen(page, cfg) -> bool:
+    """Detect presence of a login form (supports iframe-based IdPs and HPE auth page)."""
+    if is_hpe_auth_page(page, cfg):
+        return True
+    sels_user = cfg.get("login_username_any") or []
+    sels_pass = cfg.get("login_password_any") or []
+    # If either field is visible, we are on a login screen.
+    if sels_user:
+        if first_visible_locator_anywhere(page, sels_user):
+            return True
+    if sels_pass:
+        if first_visible_locator_anywhere(page, sels_pass):
+            return True
+    # Last resort: any visible password input
+    try:
+        if page.locator("input[type='password']").first.is_visible(timeout=500):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def perform_login(page, context, cfg, home_url: str, username: str, password: str, timeout_ms: int = 120000) -> bool:
+    """More robust auto-login (no MFA).
+
+    Strategy:
+    - Always start from cfg['signin_direct_url'] (stable entry point)
+    - Search inputs in page OR frames
+    - Fallback to generic visible email/text/password inputs
+    - Handle cookie banners + authenticating screens
+    - Dump debug screenshot/html on failure (outdir/debug) using env:HPE_OUTDIR
+    """
+    if not username or not password:
+        return False
+
+    signin_url = (cfg.get("signin_direct_url") or "https://support.hpe.com/hpesc/public/home/signin").strip()
+
+    def _out_debug_dir():
+        outdir = os.environ.get("HPE_OUTDIR") or ""
+        if not outdir:
+            return None
+        d = Path(outdir) / "debug"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return None
+        return d
+
+    def _dump_debug(tag: str):
+        d = _out_debug_dir()
+        if not d:
+            return
+        try:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            page.screenshot(path=str(d / f"login_{tag}_{ts}.png"), full_page=True)
+            save_text(d / f"login_{tag}_{ts}.html", page.content())
+        except Exception:
+            return
+
+    def _first_visible_generic_user_input():
+        candidates = [
+            "input[type='email']",
+            "input[autocomplete='username']",
+            "input[name*='user' i]",
+            "input[id*='user' i]",
+            "input[name*='email' i]",
+            "input[id*='email' i]",
+            "form input[type='text']",
+            "input[type='text']",
+        ]
+        return first_visible_locator_anywhere(page, candidates)
+
+    def _first_visible_generic_pass_input():
+        candidates = [
+            "input[type='password']",
+            "input[autocomplete='current-password']",
+            "input[name*='pass' i]",
+            "input[id*='pass' i]",
+        ]
+        return first_visible_locator_anywhere(page, candidates)
+
+    def _click_first_visible(selectors):
+        loc = first_visible_locator_anywhere(page, selectors)
+        if not loc:
+            return False
+        try:
+            loc.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        try:
+            loc.click(timeout=15000, force=True)
+            return True
+        except Exception:
+            return False
+
+    # selectors from cfg
+    sels_user   = cfg.get("login_username_any") or []
+    sels_pass   = cfg.get("login_password_any") or []
+    sels_next   = cfg.get("login_next_any") or []
+    sels_submit = cfg.get("login_submit_any") or []
+
+    start = time.time()
+
+    # Always start from stable sign-in endpoint
+    try:
+        page.goto(signin_url, wait_until="domcontentloaded", timeout=60000)
+        dismiss_cookie_banner(page, cfg)
+    except Exception:
+        try:
+            page.goto(home_url, wait_until="domcontentloaded", timeout=60000)
+            _check_deadline()
+            dismiss_cookie_banner(page, cfg)
+            page.goto(signin_url, wait_until="domcontentloaded", timeout=60000)
+        except Exception:
+            _dump_debug("navfail")
+            return False
+
+    while (time.time() - start) * 1000 < timeout_ms:
+        page = ensure_page_alive(page, context)
+
+        # Cookie banners can re-appear after redirects
+        try:
+            dismiss_cookie_banner(page, cfg)
+        except Exception:
+            pass
+
+        # If we got back to portal already, consider login ok
+        try:
+            u = (page.url or "").lower()
+            if "support.hpe.com/connect/s" in u and (not is_logged_out(page, cfg)) and (not is_login_screen(page, cfg)):
+                return True
+        except Exception:
+            pass
+
+        # Authenticating screen -> wait for redirect back
+        try:
+            if is_authenticating(page, cfg):
+                try:
+                    page.wait_for_url(re.compile(r".*support\.hpe\.com/connect/s/.*"), timeout=60000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Hard error banners
+        if is_session_expired(page, cfg):
+            _dump_debug("sessionexpired")
+            return False
+
+        # Find inputs (selectors first, then generic fallback)
+        user_box = first_visible_locator_anywhere(page, sels_user) if sels_user else None
+        if not user_box:
+            user_box = _first_visible_generic_user_input()
+        pass_box = first_visible_locator_anywhere(page, sels_pass) if sels_pass else None
+        if not pass_box:
+            pass_box = _first_visible_generic_pass_input()
+
+        # If we have username but no password yet: fill + Next
+        if user_box and (not pass_box):
+            try:
+                user_box.click(timeout=8000, force=True)
+            except Exception:
+                pass
+            try:
+                user_box.fill(username, timeout=15000)
+            except Exception:
+                try:
+                    user_box.press("Control+A")
+                    user_box.type(username, delay=25)
+                except Exception:
+                    _dump_debug("filluserfail")
+                    return False
+
+            # Next (or Enter)
+            if sels_next and _click_first_visible(sels_next):
+                pass
+            else:
+                try:
+                    user_box.press("Enter")
+                except Exception:
+                    pass
+
+            try:
+                page.wait_for_timeout(1200)
+            except Exception:
+                pass
+            continue
+
+        # If we have both user+pass visible (1-step), fill user too (if empty)
+        if user_box and pass_box:
+            try:
+                cur = (user_box.input_value(timeout=1000) or "").strip()
+            except Exception:
+                cur = ""
+            if not cur:
+                try:
+                    user_box.click(timeout=8000, force=True)
+                except Exception:
+                    pass
+                try:
+                    user_box.fill(username, timeout=15000)
+                except Exception:
+                    try:
+                        user_box.press("Control+A")
+                        user_box.type(username, delay=25)
+                    except Exception:
+                        _dump_debug("filluserfail_1step")
+                        return False
+
+        # If we have password: fill + Submit
+        if pass_box:
+            try:
+                pass_box.click(timeout=8000, force=True)
+            except Exception:
+                pass
+            try:
+                pass_box.fill(password, timeout=15000)
+            except Exception:
+                try:
+                    pass_box.press("Control+A")
+                    pass_box.type(password, delay=25)
+                except Exception:
+                    _dump_debug("fillpassfail")
+                    return False
+
+            did_click = False
+            if sels_submit:
+                did_click = _click_first_visible(sels_submit)
+            if (not did_click) and sels_next:
+                did_click = _click_first_visible(sels_next)
+            if not did_click:
+                try:
+                    pass_box.press("Enter")
+                except Exception:
+                    pass
+
+            # Wait for redirect back
+            try:
+                page.wait_for_url(re.compile(r".*support\.hpe\.com/connect/s/.*"), timeout=60000)
+            except Exception:
+                try:
+                    page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+
+            try:
+                u = (page.url or "").lower()
+                if "support.hpe.com/connect/s" in u and (not is_logged_out(page, cfg)) and (not is_login_screen(page, cfg)):
+                    return True
+            except Exception:
+                pass
+
+            _dump_debug("postsubmit_notloggedin")
+            try:
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+            continue
+
+        # No inputs found yet; short wait
+        try:
+            page.wait_for_timeout(800)
+        except Exception:
+            pass
+
+    _dump_debug("timeout")
+    return False
+
+
+
+def recover_session(page, context, cfg, home_url: str, username: str, password: str) -> bool:
+    """Attempt to recover from session expiration by clearing cookies/storage and logging in again."""
+    page = ensure_page_alive(page, context)
+    try:
+        context.clear_cookies()
+    except Exception:
+        pass
+    try:
+        page.goto(home_url, wait_until="domcontentloaded", timeout=60000)
+        page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch(e){} }")
+    except Exception:
+        pass
+    ok = perform_login(page, context, cfg, home_url, username, password, timeout_ms=120000)
+    return ok
+
 def ensure_ready(page, cfg, timeout_ms=45000):
     start = datetime.now()
     while (datetime.now() - start).total_seconds() * 1000 < timeout_ms:
-        if any_text_present(page, cfg.get("session_expired_text_any", [])):
+
+        # If we got redirected to auth/login, bail out early so caller can re-login.
+        try:
+            u = (page.url or "").lower()
+            if "auth.hpe.com" in u:
+                raise RuntimeError("LOGIN_REQUIRED")
+        except Exception:
+            pass
+        if is_login_screen(page, cfg) or is_logged_out(page, cfg) or is_authenticating(page, cfg):
+            raise RuntimeError("LOGIN_REQUIRED")
+
+        # We only consider the page "ready" when we are truly on the cases tab
+        try:
+            if "tab=cases" not in (page.url or ""):
+                page.wait_for_timeout(300)
+                continue
+        except Exception:
+            pass
+
+        if any_text_present_anywhere(page, cfg.get("session_expired_text_any", [])):
             raise RuntimeError("SESSION_EXPIRED")
-        if any_text_present(page, cfg.get("ready_text_any", [])):
+
+        # Prefer: case list container or a case-number pattern
+        if largest_visible_locator(page, cfg.get("case_list_container_any", [])):
             return True
-        if page.locator("text=/\\bCase\\s+\\d{7,12}\\b/").count() > 0:
-            return True
+
+        # Regex check (raw string avoids Python escape warnings)
+        try:
+            if page.locator("text=/\\bCase\\s+\\d{7,12}\\b/").count() > 0:
+                return True
+        except Exception:
+            # If the target closed mid-check, let caller retry.
+            raise
+
         page.wait_for_timeout(500)
     raise RuntimeError("CASES_PAGE_NOT_READY_TIMEOUT")
+
 
 def dismiss_contract_banner(page, cfg):
     if not any_text_present(page, cfg.get("contract_banner_text_any", [])):
         return False
+
+
+def goto_cases_with_retry(page, cfg, cases_url: str, timeout_ms: int = 60000) -> None:
+    """Navigate to the cases page robustly.
+
+    The HPE portal is a SPA; in some environments Playwright may surface net::ERR_ABORTED
+    even though the client-side router has already switched the view. In headless runs
+    this is more likely. Treat ERR_ABORTED as recoverable and verify the route.
+    """
+    try:
+        page.goto(cases_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        return
+    except Exception as e:
+        if "net::ERR_ABORTED" not in str(e):
+            raise
+        print("WARN: Page.goto(cases) aborted (net::ERR_ABORTED). Retrying via UI navigation...")
+        try:
+            page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+    # If the SPA already switched routes, we're good.
+    try:
+        if "tab=cases" in (page.url or ""):
+            return
+    except Exception:
+        pass
+
+    # Short wait for route change (if it is still in progress).
+    try:
+        page.wait_for_url("**tab=cases**", timeout=5000)
+        return
+    except Exception:
+        pass
+
+    # Click a cases link/tab in the UI.
+    try:
+        link = page.locator("a[href*='tab=cases']").first
+        if link.count() > 0:
+            try:
+                link.scroll_into_view_if_needed(timeout=3000)
+            except Exception:
+                pass
+            link.click(timeout=15000, force=True)
+            page.wait_for_url("**tab=cases**", timeout=timeout_ms)
+            return
+    except Exception:
+        pass
+
+    # Last resort: retry navigation with a weaker readiness condition.
+    try:
+        page.goto(cases_url, wait_until="commit", timeout=timeout_ms)
+    except Exception as e:
+        if "net::ERR_ABORTED" in str(e):
+            return
+        raise
+
     btn = first_visible_locator(page, cfg.get("contract_banner_dismiss_any", []))
     if btn:
         try:
@@ -420,6 +1155,148 @@ def extract_address_block(text: str) -> dict:
                 return d
     return {}
 
+
+def extract_onsite_from_comms(text: str) -> Dict[str, str]:
+    """Best-effort extraction of onsite service signals from Communications.
+
+    We keep it conservative (only fill fields when we are reasonably sure),
+    because this info is mainly used to avoid UNKNOWN for In Progress cases.
+    """
+    out: Dict[str, str] = {}
+    if not text:
+        return out
+
+    low = text.lower()
+    if ("onsite" not in low) and ("on the way to your location" not in low) and ("is on the way to your location" not in low):
+        return out
+
+    out["onsite_detected"] = "1"
+
+    # Example: "Jan Vanroy is on the way to your location..."
+    m = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+is\s+on\s+the\s+way\s+to\s+your\s+location\b", text)
+    if m:
+        out["onsite_engineer"] = m.group(1).strip()
+
+    # Example: "assist you with your onsite task (5401149164-541)."
+    m = re.search(r"\bonsite\s+task\s*\(\s*([0-9]{7,12}-[0-9]{1,4})\s*\)", text, re.I)
+    if m:
+        out["onsite_task_ref"] = m.group(1).strip()
+
+    # Some templates contain a numeric task id (different from case number)
+    m = re.search(r"\bTask\s*ID\s*[:\s]+([0-9]{4,})\b", text, re.I)
+    if m:
+        out["onsite_task_id"] = m.group(1).strip()
+
+    return out
+
+
+def extract_onsite_kv(text: str) -> Dict[str, str]:
+    """Extract key/value fields from the Onsite Service tab text."""
+    out: Dict[str, str] = {}
+    if not text:
+        return out
+
+    m = re.search(r"\bTask\s*ID\s+([0-9]{4,})\b", text, re.I)
+    if m:
+        out["onsite_task_id"] = m.group(1).strip()
+
+    m = re.search(r"\bScheduling\s+Status\s+([A-Za-z][A-Za-z \-]{0,40})\b", text, re.I)
+    if m:
+        out["onsite_scheduling_status"] = m.group(1).strip()
+
+    m = re.search(r"\bLatest\s+Service\s+Start\s+([A-Za-z]{3}\s+\d{1,2},\s+\d{4},?\s+\d{1,2}:\d{2}\s+[AP]M)\b", text)
+    if m:
+        out["onsite_latest_service_start"] = m.group(1).strip()
+
+    return out
+
+
+def try_extract_onsite_tab_text(page) -> str:
+    """Try to open the 'Onsite Service' tab and return its visible panel text.
+
+    Best-effort only; must never break the run.
+
+    Note: In headless/scheduled runs the tab strip can be partially off-screen or inside an
+    overflow container. We therefore scroll into view and use aria-controls when available.
+    """
+    markers = ["Task ID", "Scheduling Status", "Latest Service Start", "Onsite Service Request"]
+    try:
+        tab = page.get_by_role("tab", name=re.compile(r"Onsite\s+Service", re.I)).first
+        if tab.count() == 0:
+            return ""
+
+        # Make the tab clickable even in headless/overflowed layouts
+        try:
+            tab.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            try:
+                tab.evaluate("el => el.scrollIntoView({block:'center', inline:'center'})")
+            except Exception:
+                pass
+
+        # Click the tab (force helps in overflow containers)
+        try:
+            tab.click(timeout=8000, force=True)
+        except Exception:
+            try:
+                page.locator("text=/Onsite\\s+Service/i").first.click(timeout=8000, force=True)
+            except Exception:
+                return ""
+
+        # Give the UI a moment to render the tabpanel content
+        try:
+            page.wait_for_timeout(900)
+        except Exception:
+            pass
+
+        # Preferred: resolve the tabpanel via aria-controls (more deterministic than scanning all panels)
+        try:
+            panel_id = tab.get_attribute("aria-controls")
+        except Exception:
+            panel_id = None
+
+        if panel_id:
+            try:
+                panel = page.locator(f"#{panel_id}")
+                try:
+                    panel.wait_for(state="visible", timeout=8000)
+                except Exception:
+                    pass
+                t = panel.inner_text(timeout=8000)
+                if any(m in t for m in markers):
+                    return t
+            except Exception:
+                pass
+
+        # Fallback: scan visible tabpanels and pick the one with the expected markers
+        try:
+            panels = page.get_by_role("tabpanel")
+            count = panels.count()
+        except Exception:
+            count = 0
+
+        for i in range(min(count, 20)):
+            p = panels.nth(i)
+            try:
+                if not p.is_visible():
+                    continue
+                t = p.inner_text(timeout=8000)
+                if any(m in t for m in markers):
+                    return t
+            except Exception:
+                continue
+
+        # Last resort: search the page main content (if the UI inlined the tab content)
+        try:
+            t = page.locator("main").inner_text(timeout=8000)
+            return t if any(m in t for m in markers) else ""
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+
+
+
 def infer_requested_actions(status: str, comms: str):
     st = (status or "").lower()
     c = (comms or "").lower()
@@ -448,6 +1325,22 @@ def infer_requested_actions(status: str, comms: str):
         if ("ilo storage" in c) or ("photo of the physical drive" in c) or ("led" in c):
             actions.append("Screenshot iLO Storage tab of foto fysieke disk/LEDs toevoegen.")
 
+    # Onsite service / dispatch updates (often for In Progress cases)
+    if not actions and (("onsite service" in c) or ("onsite task" in c) or ("on the way to your location" in c) or ("is on the way to your location" in c) or ("dispatch" in c and "engineer" in c)):
+        category = "ONSITE_SERVICE"
+        summary = "HPE onsite interventie/dispatch loopt (technieker gepland/onderweg)."
+        actions.append("Check Onsite Service tab voor planning/status (task ID, scheduling status, latest service start).")
+        actions.append("Zorg dat toegang/site contact klopt; bereid interventie/onderdelen/remote access voor.")
+        return category, summary, actions
+
+    # General in-progress cases where HPE is working and no explicit customer action is detected
+    if not actions and ("in progress" in st or "in progress" in c):
+        category = "IN_PROGRESS"
+        summary = "Case is in progress bij HPE (lopende opvolging, geen duidelijke customer action gedetecteerd)."
+        actions.append("Opvolgen: check laatste HPE update; reageer enkel als HPE iets vraagt.")
+        return category, summary, actions
+
+
     if not actions and "awaiting customer action" in st:
         category = "AWAITING"
         summary = "Case staat op Awaiting Customer Action."
@@ -460,14 +1353,50 @@ def infer_requested_actions(status: str, comms: str):
     return category, summary, actions
 
 def collect_case_numbers(page, cfg, max_cases: int):
-    container = first_visible_locator(page, cfg.get("case_list_container_any", []))
+    # IMPORTANT: use the *largest* visible candidate, not the first.
+    # This avoids scoping to a single status section like "Awaiting Customer Action".
+    container = largest_visible_locator(page, cfg.get("case_list_container_any", []))
     scope = container if container else page
     rx = re.compile(cfg.get("case_text_regex", r"\bCase\s+(\d{7,12})\b"))
     found, seen = [], set()
 
+    # Try to get a scrollable element handle (virtualized lists often live in a scroll panel)
+    scroll_handle = None
+    try:
+        if container:
+            scroll_handle = container.evaluate_handle(
+                r"""el => {
+  function isScrollable(x){
+    if(!x) return false;
+    const s = getComputedStyle(x);
+    const oy = (s.overflowY||'').toLowerCase();
+    return (oy === 'auto' || oy === 'scroll') && x.scrollHeight > x.clientHeight + 10;
+  }
+  let x = el;
+  while (x && x !== document.body) {
+    if (isScrollable(x)) return x;
+    x = x.parentElement;
+  }
+  // Fallback: find any scrollable element that contains case numbers
+  const rx = /\bCase\s+\d{7,12}\b/;
+  const nodes = Array.from(document.querySelectorAll('*'));
+  for (const n of nodes) {
+    try {
+      if (!rx.test(n.innerText || '')) continue;
+      if (isScrollable(n)) return n;
+    } catch (e) {}
+  }
+  return document.scrollingElement || document.documentElement;
+}"""
+            )
+    except Exception:
+        scroll_handle = None
+
     for _ in range(15):
         try:
-            loc = scope.locator("text=/\\bCase\\s+\\d{7,12}\\b/")
+            # Use page-wide locator to avoid missing cases outside the chosen scope.
+            # Scope is still helpful for scrolling, not for matching.
+            loc = page.locator("text=/\\bCase\\s+\\d{7,12}\\b/")
             texts = loc.all_text_contents()
         except Exception:
             texts = []
@@ -483,12 +1412,17 @@ def collect_case_numbers(page, cfg, max_cases: int):
                         return found
 
         try:
-            if container:
-                container.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+            if scroll_handle:
+                scroll_handle.evaluate("el => { el.scrollTop = el.scrollTop + Math.max(800, el.clientHeight * 0.9); }")
+            elif container:
+                container.evaluate("el => { el.scrollTop = el.scrollTop + Math.max(800, el.clientHeight * 0.9); }")
             else:
                 page.mouse.wheel(0, 1200)
         except Exception:
-            pass
+            try:
+                page.mouse.wheel(0, 1200)
+            except Exception:
+                pass
 
         page.wait_for_timeout(800)
 
@@ -672,6 +1606,7 @@ def main():
     ap.add_argument("--format", default="both", choices=["csv", "json", "both"], help="Export format for overview")
     ap.add_argument("--alarm-file", default="ALERT_SESSION_EXPIRED.txt", help="Alarm file to write on session timeout")
     ap.add_argument("--alarm-cmd", default=None, help="Optional command to execute when session expired (e.g. PowerShell mail)")
+    ap.add_argument("--timeout", type=int, default=0, help="Max runtime in seconds (0=unlimited)")
     args = ap.parse_args()
 
     state_path = Path(args.state)
@@ -680,10 +1615,16 @@ def main():
     (outdir / "cases").mkdir(parents=True, exist_ok=True)
     (outdir / "debug").mkdir(parents=True, exist_ok=True)
 
+    # Let login/debug helpers know where to write artifacts
+    os.environ.setdefault("HPE_OUTDIR", str(outdir))
+
+    # Configure global runtime deadline (optional)
+    global _DEADLINE
+    _DEADLINE = (time.time() + args.timeout) if getattr(args, 'timeout', 0) and args.timeout > 0 else None
+
     if not state_path.exists():
-        print(f"ERROR: Missing state file: {state_path}")
-        print("Tip: run python .\\01_login_save_state.py to generate hpe_state.json")
-        return 3
+        print(f"WARN: Missing state file: {state_path} (will attempt auto-login if HPE_USERNAME/HPE_PASSWORD set)")
+
 
     if not cfg_path.exists():
         print(f"ERROR: Missing selectors file: {cfg_path}")
@@ -691,28 +1632,117 @@ def main():
 
     cfg = load_json(cfg_path)
     cases_url = cfg.get("cases_url", "https://support.hpe.com/connect/s/?tab=cases")
+    home_url = cfg.get("home_url", get_cases_home_url(cases_url))
     # Avoid emoji/unicode in console output (Windows codepages can mangle it)
     print(f"Open cases: {cases_url}")
+
+    # Optional headless auto-login credentials (set by Run-HPECaseBot.ps1 via DPAPI)
+    username = (os.environ.get("HPE_USERNAME") or "").strip()
+    password = os.environ.get("HPE_PASSWORD") or ""
+    if username:
+        print(f"INFO: HPE_USERNAME provided (auto-login enabled): {username}")
+
 
     results, errors = [], []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=args.headless)
-        context = browser.new_context(storage_state=str(state_path))
+        context = browser.new_context(storage_state=str(state_path)) if state_path.exists() else browser.new_context()
         page = context.new_page()
 
+        # Headless runs (Scheduled Task) sometimes render a narrower UI; use a wider viewport
+        # so tabs like 'Onsite Service' remain clickable and their tabpanels load reliably.
         try:
-            page.goto(cases_url, wait_until="domcontentloaded", timeout=60000)
+            page.set_viewport_size({'width': 1600, 'height': 1000})
+        except Exception:
+            pass
+
+        try:
+            # 1) First hit the portal home to validate session quickly and log it.
+            page.goto(home_url, wait_until="domcontentloaded", timeout=60000)
+            _check_deadline()
+            dismiss_contract_banner(page, cfg)
+            dismiss_cookie_banner(page, cfg)
+            # Wait a moment for SPA to render Sign In / Sign Out state to avoid false LOGIN OK.
+            wait_for_portal_state(page, cfg, timeout_ms=10000)
+
+            need_login = is_session_expired(page, cfg) or is_login_screen(page, cfg) or is_authenticating(page, cfg) or is_logged_out(page, cfg)
+            if need_login:
+                if username and password:
+                    print("WARN: Login required. Attempting auto-login (no MFA)...")
+                    ok = perform_login(page, context, cfg, home_url, username, password, timeout_ms=120000)
+                    _check_deadline()
+                    # Login flows may open a new tab/page; ensure we keep using the active page.
+                    page = ensure_page_alive(page, context)
+                    dismiss_contract_banner(page, cfg)
+                    dismiss_cookie_banner(page, cfg)
+                    if not ok:
+                        write_alarm(outdir, args.alarm_file, "Login required but auto-login failed.", args.alarm_cmd)
+                        print("LOGIN FAILED (auto-login failed; alarm written)")
+                        return 2
+                    # Save state as soon as we have a valid session (prevents later SESSION_EXPIRED loops)
+                    try:
+                        atomic_write_storage_state(context, state_path)
+                        print(f"Session state refreshed: {state_path}")
+                    except Exception as e:
+                        print(f"WARN: could not write state file ({state_path}): {e}")
+                    try:
+                        page.goto(home_url, wait_until="domcontentloaded", timeout=60000)
+                        _check_deadline()
+                        dismiss_contract_banner(page, cfg)
+                        dismiss_cookie_banner(page, cfg)
+                    except Exception:
+                        pass
+                else:
+                    write_alarm(outdir, args.alarm_file, "Session expired / login required on HPE portal.", args.alarm_cmd)
+                    print("LOGIN FAILED / SESSION_EXPIRED (alarm written)")
+                    return 2
+
+            if not (is_session_expired(page, cfg) or is_login_screen(page, cfg) or is_authenticating(page, cfg) or is_logged_out(page, cfg)):
+                print("LOGIN OK")
+
+
+            # 2) Then go to Cases.
+            goto_cases_with_retry(page, cfg, cases_url, timeout_ms=60000)
+            _check_deadline()
             dismiss_contract_banner(page, cfg)
 
             try:
                 ensure_ready(page, cfg, timeout_ms=45000)
-            except RuntimeError as e:
-                if str(e) == "SESSION_EXPIRED":
-                    write_alarm(outdir, args.alarm_file, "Session expired / login required on HPE portal.", args.alarm_cmd)
-                    print("SESSION_EXPIRED (alarm written)")
-                    return 2
-                raise
+            except (RuntimeError, PWError) as e:
+                reason = str(e)
+                if isinstance(e, PWError):
+                    # TargetClosedError or navigation disruptions should trigger a re-login attempt.
+                    reason = "LOGIN_REQUIRED"
+                if reason in ("SESSION_EXPIRED","LOGIN_REQUIRED"):
+                    if username and password:
+                        print("WARN: SESSION_EXPIRED on cases page. Attempting auto-relogin...")
+                        ok = recover_session(page, context, cfg, home_url, username, password)
+                        _check_deadline()
+                        page = ensure_page_alive(page, context)
+                        dismiss_contract_banner(page, cfg)
+                        dismiss_cookie_banner(page, cfg)
+                        if not ok:
+                            write_alarm(outdir, args.alarm_file, "Session expired / login required on HPE portal.", args.alarm_cmd)
+                            print("SESSION_EXPIRED (auto-relogin failed; alarm written)")
+                            return 2
+                        try:
+                            atomic_write_storage_state(context, state_path)
+                            print(f"Session state refreshed: {state_path}")
+                        except Exception as ex:
+                            print(f"WARN: could not write state file ({state_path}): {ex}")
+
+                        goto_cases_with_retry(page, cfg, cases_url, timeout_ms=60000)
+                        _check_deadline()
+                        dismiss_contract_banner(page, cfg)
+                        dismiss_cookie_banner(page, cfg)
+                        ensure_ready(page, cfg, timeout_ms=45000)
+                    else:
+                        write_alarm(outdir, args.alarm_file, "Session expired / login required on HPE portal.", args.alarm_cmd)
+                        print("SESSION_EXPIRED (alarm written)")
+                        return 2
+                if reason != "SESSION_EXPIRED":
+                    raise
 
             case_nos = collect_case_numbers(page, cfg, args.max)
             case_nos = case_nos[:args.max] if args.max > 0 else case_nos
@@ -721,6 +1751,7 @@ def main():
 
             for idx, case_no in enumerate(case_nos, start=1):
                 print(f"\n=== [{idx}/{len(case_nos)}] Case {case_no} ===")
+                _check_deadline()
                 try:
                     open_case_by_number(page, cfg, case_no)
 
@@ -760,6 +1791,51 @@ def main():
                     drop_hosts, drop_logins = extract_dropbox_info(comms_text)
 
                     category, summary, actions = infer_requested_actions(fields.get("status",""), comms_text)
+
+                    # If this looks like an onsite service case, try to enrich with a few structured fields.
+                    # This ONLY adds extra JSON keys; CSV stays unchanged (extras are ignored by the writer).
+                    onsite_info = extract_onsite_from_comms(comms_text)
+                    onsite_hint = (
+                        ("onsite" in (hpe_subject or "").lower())
+                        or ("onsite_detected" in onsite_info)
+                        or (category == "ONSITE_SERVICE")
+                    )
+
+                    # If comms parsing didn't reveal onsite signals, do a cheap UI hint check:
+                    # (Some 'In Progress' cases have an Onsite Service tab but short/empty comms rendering.)
+                    if not onsite_hint:
+                        try:
+                            if page.get_by_role("tab", name=re.compile(r"Onsite\s+Service", re.I)).count() > 0:
+                                onsite_hint = True
+                                onsite_info.setdefault("onsite_detected", "1")
+                        except Exception:
+                            pass
+
+                    if onsite_hint:
+                        try:
+                            onsite_tab_text = try_extract_onsite_tab_text(page)
+                            onsite_info.update(extract_onsite_kv(onsite_tab_text))
+                        except Exception:
+                            pass
+
+                    # If onsite fields are present, prefer ONSITE_SERVICE over generic IN_PROGRESS
+                    if category == "IN_PROGRESS" and any(
+                        onsite_info.get(k)
+                        for k in (
+                            "onsite_task_id",
+                            "onsite_task_ref",
+                            "onsite_scheduling_status",
+                            "onsite_latest_service_start",
+                            "onsite_engineer",
+                        )
+                    ):
+                        category = "ONSITE_SERVICE"
+                        summary = "HPE onsite interventie/dispatch loopt (technieker gepland/onderweg)."
+                        actions = [
+                            "Check Onsite Service tab voor planning/status (task ID, scheduling status, latest service start).",
+                            "Zorg dat toegang/site contact klopt; bereid interventie/onderdelen/remote access voor.",
+                        ]
+
                     key_links = extract_key_links(last_block or comms_text, limit=8)
 
                     action_plan = fields.get("action_plan", "")
@@ -796,6 +1872,15 @@ def main():
                         "ahs_links": " | ".join(ahs_links),
                         "dropbox_hosts": " | ".join(drop_hosts),
                         "dropbox_logins": " | ".join(drop_logins),
+
+                        # Optional: onsite service enrichment (only in JSON; CSV ignores extras)
+                        "onsite_detected": onsite_info.get("onsite_detected",""),
+                        "onsite_task_ref": onsite_info.get("onsite_task_ref",""),
+                        "onsite_task_id": onsite_info.get("onsite_task_id",""),
+                        "onsite_scheduling_status": onsite_info.get("onsite_scheduling_status",""),
+                        "onsite_latest_service_start": onsite_info.get("onsite_latest_service_start",""),
+                        "onsite_engineer": onsite_info.get("onsite_engineer",""),
+
                         "comms_file": str(comms_file),
                         "generated_at": utc_now_iso()
                     }
@@ -837,6 +1922,13 @@ def main():
                 save_json(json_path, {"generated_at": utc_now_iso(), "cases": results, "errors": errors})
                 print(f"JSON: {json_path}")
 
+            # Refresh session state on disk to avoid daily re-login.
+            try:
+                atomic_write_storage_state(context, state_path)
+                print(f"Session state refreshed: {state_path}")
+            except Exception as e:
+                print(f"WARN: could not refresh state file ({state_path}): {e}")
+
             if errors:
                 save_json(outdir / "debug" / "errors.json", errors)
                 print(f"Completed with {len(errors)} error(s). Debug in: {outdir / 'debug'}")
@@ -844,10 +1936,34 @@ def main():
 
             print(f"\nDone. Cases: {len(results)}")
             return 0
+        except KeyboardInterrupt:
+            # Graceful Ctrl+C
+            print('INTERRUPTED')
+            return 130
+
+        except RuntimeError as e:
+            if str(e) == 'GLOBAL_TIMEOUT':
+                print('ERROR: GLOBAL_TIMEOUT reached. Aborting run.')
+                try:
+                    page.screenshot(path=str(outdir / 'debug' / 'global_timeout.png'), full_page=True)
+                except Exception:
+                    pass
+                try:
+                    save_text(outdir / 'debug' / 'global_timeout.html', page.content())
+                except Exception:
+                    pass
+                return 4
+            raise
 
         finally:
-            context.close()
-            browser.close()
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     raise SystemExit(main())
