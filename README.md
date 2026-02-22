@@ -94,6 +94,88 @@ Recommended:
 
 ---
 
+EXAMPLE
+```json
+{
+  "generated_at": "2026-02-22T14:40:XXZ",
+  "cases": [
+    {
+      "case_no": "CASE-001",
+      "serial": "SERIAL-001",
+      "host_name": "",
+      "contact_name": "",
+      "addr_street": "",
+      "addr_city": "",
+      "addr_state": "",
+      "addr_postal_code": "",
+      "addr_country": "",
+      "status": "In Progress",
+      "severity": "2-Limited Business Impact",
+      "product": "HPE ProLiant DL3xx Gen10 Server",
+      "product_no": "PXXXXX-XXX",
+      "group": "My Group (Redacted)",
+      "action_plan": "",
+      "hpe_last_update": "",
+      "hpe_last_subject": "",
+      "hpe_request_category": "ONSITE_SERVICE",
+      "hpe_request_summary": "HPE onsite interventie/dispatch loopt (technieker gepland/onderweg).",
+      "hpe_requested_actions": "Check Onsite Service tab voor planning/status (task ID, scheduling status, latest service start). | Zorg dat toegang/site contact klopt; bereid interventie/onderdelen/remote access voor.",
+      "hpe_key_links": "",
+      "event_ids": "",
+      "problem_descriptions": "",
+      "ahs_links": "",
+      "dropbox_hosts": "",
+      "dropbox_logins": "",
+      "onsite_detected": "1",
+      "onsite_task_ref": "",
+      "onsite_task_id": "TASK-001",
+      "onsite_scheduling_status": "HPE Hold",
+      "onsite_latest_service_start": "Feb XX, 2026, XX:XX XX",
+      "onsite_engineer": "",
+      "comms_file": "C:\\REDACTED\\out_hpe\\cases\\CASE-001_communications_redacted.txt",
+      "generated_at": "2026-02-22T14:39:XXZ"
+    },
+    {
+      "case_no": "CASE-002",
+      "serial": "SERIAL-002",
+      "host_name": "",
+      "contact_name": "",
+      "addr_street": "",
+      "addr_city": "",
+      "addr_state": "",
+      "addr_postal_code": "",
+      "addr_country": "",
+      "status": "In Progress",
+      "severity": "3-No Business Impact",
+      "product": "HPE ProLiant DL3xx Gen10 Server",
+      "product_no": "PXXXXX-XXX",
+      "group": "My Group (Redacted)",
+      "action_plan": "",
+      "hpe_last_update": "",
+      "hpe_last_subject": "",
+      "hpe_request_category": "ONSITE_SERVICE",
+      "hpe_request_summary": "HPE onsite interventie/dispatch loopt (technieker gepland/onderweg).",
+      "hpe_requested_actions": "Check Onsite Service tab voor planning/status (task ID, scheduling status, latest service start). | Zorg dat toegang/site contact klopt; bereid interventie/onderdelen/remote access voor.",
+      "hpe_key_links": "",
+      "event_ids": "",
+      "problem_descriptions": "",
+      "ahs_links": "",
+      "dropbox_hosts": "",
+      "dropbox_logins": "",
+      "onsite_detected": "1",
+      "onsite_task_ref": "",
+      "onsite_task_id": "TASK-002",
+      "onsite_scheduling_status": "Closed",
+      "onsite_latest_service_start": "Feb XX, 2026, XX:XX XX",
+      "onsite_engineer": "",
+      "comms_file": "C:\\REDACTED\\out_hpe\\cases\\CASE-002_communications_redacted.txt",
+      "generated_at": "2026-02-22T14:40:XXZ"
+    }
+  ],
+  "errors": []
+}
+```
+---
 ## Security
 Do not commit:
 - `hpe_state.json`
